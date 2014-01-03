@@ -44,7 +44,11 @@ static volatile uint8_t update_needed = 0;
 
 #include "avr_hd44780.c"
 
+#if __EXTERNAL
 ISR( INT0_vect )
+#else
+void timer(void)
+#endif
 {
 	/* External interrupt on pin D2 */
 	subsecct++;
@@ -87,14 +91,20 @@ int main()
 	hd44780_outcmd(HD44780_DISPCTL(1, 1, 0));
 	hd44780_wait_ready(0);
 
+#if __EXTERNAL
 	EICRA = (1 << ISC00);
 	EIMSK = (1 << INT0);
+#endif
 
 	sei();
 
 	while (1) {
 		while (!update_needed)
-			sleep_mode();
+#if __EXTERNAL
+        sleep_mode();
+#else
+            timer();
+#endif
 		update_needed = 0;
 		char buffer[16];
 
