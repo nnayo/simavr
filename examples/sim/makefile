@@ -17,7 +17,7 @@
 #	You should have received a copy of the GNU General Public License
 #	along with simavr.  If not, see <http://www.gnu.org/licenses/>.
 
-targets = mpu6050.so eeprom_i2c.so sc18is600.so
+targets = mpu6050.so eeprom_i2c.so sc18is600.so gl_lcd.so
 simavr = ../..
 
 IPATH = .
@@ -29,7 +29,11 @@ VPATH = .
 VPATH += ${simavr}/examples/shared
 VPATH += ${simavr}/examples/parts
 
-CFLAGS += -shared
+CFLAGS += -shared -O0 -g
+CPPFLAGS    += ${shell pkg-config --cflags glu}
+#LDFLAGS     += ${shell pkg-config --libs glu} -lglut
+LDFLAGS     += -lglut
+LDFLAGS		+= -shared -lpthread
 
 
 all: ${targets} 
@@ -37,8 +41,11 @@ all: ${targets}
 include ${simavr}/Makefile.common
 
 %.so: %.c
-	$(CC) -MMD ${CPPFLAGS} ${CFLAGS}  ${LFLAGS} -o $@ $^ $(LDFLAGS)
+	$(CC) -MMD ${CPPFLAGS} ${CFLAGS}  ${LFLAGS} -o $@ $^
 
+
+gl_lcd.so: gl_lcd.o ../parts/ac_input.o ../parts/hd44780_glut.o ../parts/hd44780.o
+	$(CC) -MMD ${LDFLAGS} -o $@ $^
 
 clean:
 	rm -rf *.so .*.swo .*.swp .*.swm .*.swn
