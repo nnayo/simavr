@@ -52,7 +52,7 @@ void avr_load_firmware(avr_t * avr, elf_firmware_t * firmware)
 	if (firmware->aref)
 		avr->aref = firmware->aref;
 #if CONFIG_SIMAVR_TRACE && ELF_SYMBOLS
-	int scount = firmware->flashsize >> 1;
+	int scount = (firmware->flashsize >> 1) + 1;
 	avr->trace_data->codeline = malloc(scount * sizeof(avr_symbol_t*));
 	memset(avr->trace_data->codeline, 0, scount * sizeof(avr_symbol_t*));
 

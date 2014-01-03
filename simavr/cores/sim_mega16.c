@@ -1,5 +1,5 @@
 /*
-	sim_megax.c
+	sim_mega16.c
 
 	Copyright 2008, 2009 Michel Pollet <buserror@gmail.com>
 
@@ -19,35 +19,27 @@
 	along with simavr.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// atmega32 has different name for Watchdog Turn-off Enable register 
+#define WDCE WDTOE
 #include "sim_avr.h"
 
+#define SIM_VECTOR_SIZE	4
+#define SIM_MMCU		"atmega16"
+#define SIM_CORENAME	mcu_mega16
 
+#define _AVR_IO_H_
+#define __ASSEMBLER__
+#include "avr/iom16.h"
+// instantiate the new core
 #include "sim_megax.h"
 
-void mx_init(struct avr_t * avr)
+static avr_t * make()
 {
-	struct mcu_t * mcu = (struct mcu_t*)avr;
-
-	avr_eeprom_init(avr, &mcu->eeprom);
-	avr_flash_init(avr, &mcu->selfprog);
-	avr_watchdog_init(avr, &mcu->watchdog);
-	avr_extint_init(avr, &mcu->extint);
-#ifdef PORTA
-	avr_ioport_init(avr, &mcu->porta);
-#endif
-	avr_ioport_init(avr, &mcu->portb);
-	avr_ioport_init(avr, &mcu->portc);
-	avr_ioport_init(avr, &mcu->portd);
-	avr_uart_init(avr, &mcu->uart);
-	avr_adc_init(avr, &mcu->adc);
-	avr_timer_init(avr, &mcu->timer0);
-	avr_timer_init(avr, &mcu->timer1);
-	avr_timer_init(avr, &mcu->timer2);
-	avr_spi_init(avr, &mcu->spi);
-	avr_twi_init(avr, &mcu->twi);
+	return avr_core_allocate(&SIM_CORENAME.core, sizeof(struct mcu_t));
 }
 
-void mx_reset(struct avr_t * avr)
-{
-//	struct mcu_t * mcu = (struct mcu_t*)avr;
-}
+avr_kind_t mega16 = {
+	.names = { "atmega16", },
+	.make = make
+};
+
