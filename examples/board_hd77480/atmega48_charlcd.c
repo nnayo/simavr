@@ -36,7 +36,11 @@
 #include "avr_mcu_section.h"
 AVR_MCU(F_CPU, "atmega48");
 
+#if __EXTERNAL
 static uint8_t subsecct = 0;
+#else
+static uint16_t subsecct = 0;
+#endif
 static uint8_t hour = 0;
 static uint8_t minute = 0;
 static uint8_t second = 0;
@@ -52,7 +56,11 @@ void timer(void)
 {
 	/* External interrupt on pin D2 */
 	subsecct++;
+#if __EXTERNAL
 	if (subsecct == 50) {
+#else
+	if (subsecct == 50000) {
+#endif
 		second++;
 		subsecct = 0;
 		update_needed = 1;
