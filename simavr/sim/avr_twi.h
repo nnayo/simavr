@@ -37,29 +37,31 @@ enum {
 	TWI_IRQ_COUNT
 };
 
-enum {
-	TWI_COND_START = (1 << 0),
-	TWI_COND_STOP = (1 << 1),
-	TWI_COND_ADDR = (1 << 2),
-	TWI_COND_ACK = (1 << 3),
-	TWI_COND_WRITE = (1 << 4),
-	TWI_COND_READ = (1 << 5),
-	// internal state, do not use in irq messages
-	TWI_COND_SLAVE	= (1 << 6),
-};
-
-typedef struct avr_twi_msg_t {
-	uint32_t unused : 8,
-		msg : 8,
-		addr : 8,
-		data : 8;
+typedef enum avr_twi_msg_t {
+	TWI_MSG_NULL,
+	TWI_MSG_START,
+	TWI_MSG_ADDR,
+	TWI_MSG_DATA,
+	TWI_MSG_ACK,
+	TWI_MSG_NACK,
+	TWI_MSG_CLK,
+	TWI_MSG_STOP,
+	TWI_MSG_CNT,
 } avr_twi_msg_t;
+
+typedef struct avr_twi_bus_msg_t {
+	enum avr_twi_msg_t msg : 8;
+    union {
+        uint16_t addr : 8;
+        uint16_t data : 8;
+    };
+} avr_twi_bus_msg_t;
 
 typedef struct avr_twi_msg_irq_t {
 	union {
 		uint32_t v;
-		avr_twi_msg_t twi;
-	} u;
+		avr_twi_bus_msg_t bus;
+	};
 } avr_twi_msg_irq_t;
 
 // add port number to get the real IRQ
@@ -89,9 +91,13 @@ typedef struct avr_twi_t {
 	
 	avr_int_vector_t twi;	// twi interrupt
 
-	uint8_t state;
-	uint8_t peer_addr;
-	uint8_t next_twstate;
+	uint8_t bus_state:1;	// 1 if bus is active
+	uint8_t next_bus_state:1;
+	uint8_t start_pending:1;	// start requested but bus is already active
+
+	uint8_t gencall:1;	// general call handling flag
+
+	uint8_t next_twsr;
 } avr_twi_t;
 
 void
@@ -103,11 +109,10 @@ avr_twi_init(
  * Create a message value for twi including the 'msg' bitfield,
  * 'addr' and data. This value is what is sent as the IRQ value
  */
-uint32_t
+struct avr_twi_msg_irq_t
 avr_twi_irq_msg(
-		uint8_t msg,
-		uint8_t addr,
-		uint8_t data);
+		avr_twi_msg_t msg,
+		uint8_t addr_data);
 
 #ifdef __cplusplus
 };

@@ -37,35 +37,52 @@ i2c_eeprom_in_hook(
 		void * param)
 {
 	i2c_eeprom_t * p = (i2c_eeprom_t*)param;
-	avr_twi_msg_irq_t v;
-	v.u.v = value;
+	avr_twi_msg_irq_t msg;
+	msg.v = value;
 
 	/*
 	 * If we receive a STOP, check it was meant to us, and reset the transaction
 	 */
-	if (v.u.twi.msg & TWI_COND_STOP) {
+	if (msg.bus.msg == TWI_MSG_STOP) {
 		if (p->selected) {
 			// it was us !
 			if (p->verbose)
 				printf("eeprom received stop\n");
 		}
 		p->selected = 0;
-		p->index = 0;
-		p->reg_addr = 0;
+		return;
 	}
 	/*
 	 * if we receive a start, reset status, check if the slave address is
 	 * meant to be us, and if so reply with an ACK bit
 	 */
-	if (v.u.twi.msg & TWI_COND_START) {
+	if (msg.bus.msg == TWI_MSG_START) {
+		if (p->verbose)
+			printf("eeprom received (re)start\n");
 		p->selected = 0;
 		p->index = 0;
-		if ((p->addr_base & p->addr_mask) == (v.u.twi.addr & p->addr_mask)) {
+		msg = avr_twi_irq_msg(TWI_MSG_NULL, p->selected);
+		avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
+		return;
+	}
+
+	if (msg.bus.msg == TWI_MSG_ADDR) {
+		if ((p->addr_base & p->addr_mask) == (msg.bus.addr & p->addr_mask)) {
 			// it's us !
-			p->selected = v.u.twi.addr;
-			avr_raise_irq(p->irq + TWI_IRQ_INPUT,
-					avr_twi_irq_msg(TWI_COND_ACK, p->selected, 1));
+			p->selected = msg.bus.addr;
+			msg = avr_twi_irq_msg(TWI_MSG_ACK, p->selected);
+			printf("eeprom @ 0x%02x selected for %s\n", msg.bus.addr >> 1, msg.bus.addr & 1 ? "reading": "writing");
+
+			// if writing, reg address will be set before any data writing
+			if ((msg.bus.addr & 0x01) == 0x00) {
+				p->reg_addr = 0;
+			}
 		}
+		else {
+			msg = avr_twi_irq_msg(TWI_MSG_NACK, p->selected);
+		}
+		avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
+		return;
 	}
 	/*
 	 * If it's a data transaction, first check it is meant to be us (we
@@ -77,13 +94,18 @@ i2c_eeprom_in_hook(
 		 * as we need, then set the address register, then start
 		 * writing data,
 		 */
-		if (v.u.twi.msg & TWI_COND_WRITE) {
+		if (msg.bus.msg == TWI_MSG_DATA) {
+			// can't received data while in reading mode
+			if (p->selected & 0x01) {
+				msg = avr_twi_irq_msg(TWI_MSG_NACK, p->selected);
+				avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
+				return;
+			}
+
 			// address size is how many bytes we use for address register
-			avr_raise_irq(p->irq + TWI_IRQ_INPUT,
-					avr_twi_irq_msg(TWI_COND_ACK, p->selected, 1));
 			int addr_size = p->size > 256 ? 2 : 1;
 			if (p->index < addr_size) {
-				p->reg_addr |= (v.u.twi.data << (p->index * 8));
+				p->reg_addr |= (msg.bus.data << (p->index * 8));
 				if (p->index == addr_size-1) {
 					// add the slave address, if relevant
 					p->reg_addr += ((p->selected & 1) - p->addr_base) << 7;
@@ -92,23 +114,35 @@ i2c_eeprom_in_hook(
 				}
 			} else {
 				if (p->verbose)
-					printf("eeprom WRITE data 0x%04x: %02x\n", p->reg_addr, v.u.twi.data);
-				p->ee[p->reg_addr++] = v.u.twi.data;
+					printf("eeprom WRITE data 0x%04x: %02x\n", p->reg_addr, msg.bus.data);
+				p->ee[p->reg_addr++] = msg.bus.data;
 			}
 			p->reg_addr &= (p->size -1);
 			p->index++;
+
+			msg = avr_twi_irq_msg(TWI_MSG_ACK, p->selected);
+			avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
+			return;
 		}
 		/*
 		 * It's a read transaction, just send the next byte back to the master
 		 */
-		if (v.u.twi.msg & TWI_COND_READ) {
+		if (msg.bus.msg == TWI_MSG_ACK) {
+			// can't received ack while in writing mode
+			if (p->selected & 0x01) {
+				msg = avr_twi_irq_msg(TWI_MSG_NACK, p->selected);
+				avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
+				return;
+			}
+
 			if (p->verbose)
 				printf("eeprom READ data 0x%04x: %02x\n", p->reg_addr, p->ee[p->reg_addr]);
 			uint8_t data = p->ee[p->reg_addr++];
-			avr_raise_irq(p->irq + TWI_IRQ_INPUT,
-					avr_twi_irq_msg(TWI_COND_READ, p->selected, data));
+			msg = avr_twi_irq_msg(TWI_MSG_DATA, data);
+			avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
 			p->reg_addr &= (p->size -1);
 			p->index++;
+			return;
 		}
 	}
 }

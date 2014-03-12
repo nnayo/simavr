@@ -289,6 +289,8 @@ typedef struct avr_t {
 	// crashed even if not activated at startup
 	// if zero, the simulator will just exit() in case of a crash
 	int		gdb_port;
+
+	char	tag_name[16];
 } avr_t;
 
 
