@@ -52,6 +52,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	avr_init(avr);
+	avr->log = 3;
 	avr_load_firmware(avr, &f);
 
 	// initialize our 'peripheral'
