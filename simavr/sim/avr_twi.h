@@ -92,12 +92,9 @@ typedef struct avr_twi_t {
 	avr_int_vector_t twi;	// twi interrupt
 
 	uint8_t bus_state:1;	// 1 if bus is active
-	uint8_t next_bus_state:1;
 	uint8_t start_pending:1;	// start requested but bus is already active
 
 	uint8_t gencall:1;	// general call handling flag
-
-	uint8_t next_twsr;
 } avr_twi_t;
 
 void
