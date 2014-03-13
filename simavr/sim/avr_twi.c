@@ -195,16 +195,9 @@ _avr_twi_delay_state(
 	next_state = (struct avr_twi_set_state_t*)malloc(sizeof(struct avr_twi_set_state_t));
 
 	next_state->twi = twi;
-
-	if (twsr == (uint8_t)-1) {
-		next_state->twsr = twi->io.avr->data[twi->r_twsr];
-	}
-	else {
-		next_state->twsr = twsr;
-	}
+	next_state->twsr = (twsr == (uint8_t)-1) ? twi->io.avr->data[twi->r_twsr] : twsr;
 
 	if (msg) {
-		//avr_raise_irq(twi->io.irq + TWI_IRQ_OUTPUT, msg->v);
 		next_state->msg_ok = 1;
 		next_state->msg = *msg;
 	}
@@ -212,19 +205,9 @@ _avr_twi_delay_state(
 		next_state->msg_ok = 0;
 	}
 
-	if (bus_state == (uint8_t)-1) {
-		next_state->bus_state = twi->bus_state;
-	}
-	else {
-		next_state->bus_state = bus_state;
-	}
-
-	if (start_pending == (uint8_t)-1) {
-		next_state->start_pending = twi->start_pending;
-	}
-	else {
-		next_state->start_pending = start_pending;
-	}
+	next_state->bus_state = (bus_state == (uint8_t)-1) ? twi->bus_state : bus_state;
+	next_state->start_pending = (start_pending == (uint8_t)-1) ? twi->start_pending : start_pending;
+	next_state->raise_interrupt = raise_interrupt;
 
 	// calculate clock rate, convert to cycles, and use that to set a time-out
 	int twps10 = twi->io.avr->data[twi->r_twsr] & 0x03;
@@ -484,14 +467,14 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 	if (link) {
 		// data acked and not already gencall acked ?
 		if (link->bus.msg == TWI_MSG_ACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES + AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, -1, -1, 1);
 			p->gencall = 1;
 			return;
 		}
 
 		// data nacked and never gencall acked?
 		if (link->bus.msg == TWI_MSG_NACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES + AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, -1, -1, 1);
 			return;
 		}
 	}
@@ -617,7 +600,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_001x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_DATA, 0);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_NACK, &msg, 1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_NACK, &msg, 1, 0, 1);
 			return;
 		}
 
@@ -702,7 +685,7 @@ static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			// handling done below on data message
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_CLK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_ADR_ACK, &msg, -1, -1);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_ADR_ACK, &msg, -1, -1, 0);
 			return;
 		}
 	}
