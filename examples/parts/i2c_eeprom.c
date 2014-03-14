@@ -130,7 +130,7 @@ i2c_eeprom_in_hook(
 		 */
 		if (msg.bus.msg == TWI_MSG_ACK) {
 			// can't received ack while in writing mode
-			if (p->selected & 0x01) {
+			if (! (p->selected & 0x01)) {
 				msg = avr_twi_irq_msg(TWI_MSG_NACK, p->selected);
 				avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
 				return;
@@ -139,7 +139,7 @@ i2c_eeprom_in_hook(
 
 		if (msg.bus.msg == TWI_MSG_CLK) {
 			// can't received clock while in writing mode
-			if (p->selected & 0x01) {
+			if (! (p->selected & 0x01)) {
 				msg = avr_twi_irq_msg(TWI_MSG_NACK, p->selected);
 				avr_raise_irq(p->irq + TWI_IRQ_INPUT, msg.v);
 				return;

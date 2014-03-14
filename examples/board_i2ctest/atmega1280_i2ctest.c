@@ -66,7 +66,7 @@ int main()
 				0xa0, // TWI address,
 				0xa8, 0x01, // eeprom address, in little endian
 		};
-		TWI_Start_Transceiver_With_Data(msg, 3, 0); // dont send stop!
+		TWI_Start_Transceiver_With_Data(msg, 3, 1); // send stop because restart is not handled
 
 		while (TWI_Transceiver_Busy())
 			sleep_mode();
