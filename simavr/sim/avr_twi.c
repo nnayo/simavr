@@ -122,7 +122,7 @@ typedef struct avr_twi_set_state_t {
 
 
 // activate debug traces
-#define AVR_TWI_DEBUG 0
+#define AVR_TWI_DEBUG 1
 
 
 #if AVR_TWI_DEBUG
@@ -153,13 +153,13 @@ _avr_twi_state_update(
 	avr_twi_t * p = (avr_twi_t *)new_state->twi;
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(p->io.avr, "[%s] %s             (t=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d\n", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
+	AVR_TRACE(p->io.avr, "[\x1b[94m%s\x1b[0m] %s             (t=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d\n", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
 #endif
 
 	if (new_state->msg_ok) {
 #if AVR_TWI_DEBUG
 		struct avr_twi_msg_irq_t msg = new_state->msg;
-		AVR_TRACE(avr, "\tmsg %s  addr 0x%02x+%d / data 0x%02x\n", msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01, msg.bus.data);
+		AVR_TRACE(avr, "\tmsg %s  addr 0x%02x+%c / data 0x%02x\n", msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data);
 #endif
 		avr_raise_irq(p->io.irq + TWI_IRQ_OUTPUT, new_state->msg.v);
 	}
@@ -182,6 +182,20 @@ _avr_twi_state_update(
  * of 'twi' clock cycles, which should be derived from the prescaler
  * (100khz, 400khz etc).
  */
+
+#define TWSR_UNCHG	-1
+
+#define BUS_INACT	0
+#define BUS_UNCHG	-1
+#define BUS_ACT		1
+
+#define START_NO	0
+#define START_UNCHG	-1
+#define START_PEND	1
+
+#define WO_INT		0
+#define W_INT		1
+
 static void
 _avr_twi_delay_state(
 		avr_twi_t * twi,
@@ -221,9 +235,13 @@ _avr_twi_delay_state(
 	avr_cycle_timer_register(twi->io.avr, cycles, _avr_twi_state_update, next_state);
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(twi->io.avr, "[%s] %s in %d cycle(s)(t=%d) ==>",
+	AVR_TRACE(twi->io.avr, "[\x1b[94m%s\x1b[0m] %s in %d cycle(s)(t=%d) ==>",
 		twi->io.avr->tag_name, __func__, twi_cycles, twi->io.avr->cycle + cycles, next_state->twsr);
-	AVR_TRACE(twi->io.avr, " (bus:%d p:%d TWSR:0x%02x)\n", twi->bus_state, twi->start_pending, next_state->twsr);
+	AVR_TRACE(twi->io.avr, " (bus:%d p:%d TWSR:0x%02x) ", twi->bus_state, twi->start_pending, next_state->twsr);
+	if (msg)
+		AVR_TRACE(twi->io.avr, " msg %s", msg2chr[msg->bus.msg]);
+	AVR_TRACE(twi->io.avr, "\n");
+
 
 	if (twsr == TWI_BUS_ERROR) {
 		// segfault the code
@@ -244,7 +262,7 @@ avr_twi_config_stop_timer(
 
 	avr_regbit_clear(p->io.avr, p->twsto);
 #if AVR_TWI_DEBUG
-	AVR_TRACE(p->io.avr, "[%s] %s\n", p->io.avr->tag_name, __func__);
+	AVR_TRACE(p->io.avr, "[\x1b[94m%s\x1b[0m] %s\n", p->io.avr->tag_name, __func__);
 #endif
 
 	return 0;
@@ -264,7 +282,7 @@ _avr_twi_delay_config_stop(
 	avr_cycle_timer_register(twi->io.avr, cycles, avr_twi_config_stop_timer, twi);
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(twi->io.avr, "[%s] %s in %d cycle(s)\n", twi->io.avr->tag_name, __func__, twi_cycles);
+	AVR_TRACE(twi->io.avr, "[\x1b[94m%s\x1b[0m] %s in %d cycle(s)\n", twi->io.avr->tag_name, __func__, twi_cycles);
 #endif
 }
 
@@ -278,6 +296,7 @@ typedef struct twcr_t {
 } _twcr_t;
 
 
+// TWI_BUS_ERROR	0x00
 static void _avr_twi_fsm_bus_error(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -321,10 +340,10 @@ static void _avr_twi_fsm_start(struct avr_twi_t * p, struct twcr_t twcr, struct 
 			uint8_t slave_addr = avr->data[p->r_twdr];
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ADDR, slave_addr);
-			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, -1, &msg, -1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWSR_UNCHG, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 
 			// general call handling
-			if (slave_addr == 0x00) {
+			if ((slave_addr & 0xfe) == 0x00) {
 				p->gencall = 1;
 			}
 			return;
@@ -341,44 +360,44 @@ static void _avr_twi_fsm_start(struct avr_twi_t * p, struct twcr_t twcr, struct 
 
 		// SLA+W acked ?
 		if (write && ack) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+W nacked ?
 		if (write && nack) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+R acked ?
 		if (read && ack) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+R nacked ?
 		if (read && nack) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// gen call acked and not already acked ?
 		if (gencall && ack && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			p->gencall = 1;
 			return;
 		}
 
 		// gen call nacked and never acked ?
 		if (gencall && nack && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x10
@@ -396,7 +415,7 @@ static void _avr_twi_fsm_rep_start(struct avr_twi_t * p, struct twcr_t twcr, str
 			uint8_t slave_addr = avr->data[p->r_twdr];
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ADDR, slave_addr);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, -1, &msg, -1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWSR_UNCHG, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 
 			// general call handling
 			if (slave_addr == 0x00) {
@@ -416,44 +435,44 @@ static void _avr_twi_fsm_rep_start(struct avr_twi_t * p, struct twcr_t twcr, str
 
 		// SLA+W acked ?
 		if (write && ack) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+W nacked ?
 		if (write && nack) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+R acked ?
 		if (read && ack) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// SLA+R nacked ?
 		if (read && nack) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// gen call acked and not already acked ?
 		if (gencall && ack && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			p->gencall = 1;
 			return;
 		}
 
 		// gen call nacked and never acked ?
 		if (gencall && nack && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_ADR_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x18
@@ -470,7 +489,7 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 		if (_TWCR_COND_001x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_DATA, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, -1, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWSR_UNCHG, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 
 			// in case of gencall, at least 1 slave shall ack
 			p->gencall = 0;
@@ -482,20 +501,20 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 	if (link) {
 		// data acked and not already gencall acked ?
 		if (link->bus.msg == TWI_MSG_ACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			p->gencall = 1;
 			return;
 		}
 
 		// data nacked and never gencall acked?
 		if (link->bus.msg == TWI_MSG_NACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x20
@@ -512,7 +531,7 @@ static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_REP_START, &msg, 1, 0, 0);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_REP_START, &msg, BUS_ACT, START_NO, WO_INT);
 			return;
 		}
 
@@ -520,7 +539,7 @@ static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_011x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_INACT, START_UNCHG, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -529,7 +548,7 @@ static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_111x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 1, 1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_ACT, START_PEND, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -544,7 +563,7 @@ static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x28
@@ -561,7 +580,7 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_001x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_DATA, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_ACK, &msg, -1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 			return;
 		}
 
@@ -569,7 +588,7 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_REP_START, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_REP_START, &msg, BUS_ACT, START_NO, W_INT);
 			return;
 		}
 
@@ -577,7 +596,7 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_011x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_INACT, START_UNCHG, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -587,13 +606,13 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 	if (link) {
 		// data acked ?
 		if (link->bus.msg == TWI_MSG_ACK) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// data nacked ?
 		if (link->bus.msg == TWI_MSG_NACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -604,7 +623,7 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x30
@@ -621,7 +640,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_001x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_DATA, 0);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_NACK, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MTX_DATA_NACK, &msg, BUS_UNCHG, START_NO, W_INT);
 			return;
 		}
 
@@ -629,7 +648,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_UNCHG, START_NO, W_INT);
 			return;
 		}
 
@@ -637,7 +656,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_011x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_INACT, START_UNCHG, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -646,7 +665,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_111x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 0, 1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_UNCHG, START_PEND, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -662,7 +681,7 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x38
@@ -677,13 +696,13 @@ static void _avr_twi_fsm_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, stru
 	if (!link) {
 		// release the bus
 		if (_TWCR_COND_001x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, -1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_UNCHG, START_NO, W_INT);
 			return;
 		}
 
 		// start requested
 		if (_TWCR_COND_101x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, -1, 1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_UNCHG, START_PEND, W_INT);
 			return;
 		}
 	}
@@ -693,10 +712,10 @@ static void _avr_twi_fsm_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, stru
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x40
+// TWI_MRX_ADR_ACK			0x40
 static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -707,10 +726,9 @@ static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 	// register access ?
 	if (!link) {
 		if (_TWCR_COND_001x) {
-			// handling done below on data message
 			avr_twi_msg_irq_t msg;
-			msg = avr_twi_irq_msg(TWI_MSG_CLK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_ADR_ACK, &msg, -1, -1, 0);
+			msg = avr_twi_irq_msg(TWI_MSG_CLK, 0);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_ADR_ACK, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 			return;
 		}
 	}
@@ -720,21 +738,21 @@ static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 		if (link->bus.msg == TWI_MSG_DATA && _TWCR_COND_0011) {
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
-			msg = avr_twi_irq_msg(TWI_MSG_ACK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_DATA_ACK, &msg, -1, -1, 1);
+			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 		if (link->bus.msg == TWI_MSG_DATA && _TWCR_COND_0010) {
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
-			msg = avr_twi_irq_msg(TWI_MSG_NACK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_DATA_NACK, &msg, -1, -1, 1);
+			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // TWI_MRX_ADR_NACK           0x48
@@ -751,7 +769,7 @@ static void _avr_twi_fsm_mrx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 		if (_TWCR_COND_011x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_INACT, START_UNCHG, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -768,10 +786,10 @@ static void _avr_twi_fsm_mrx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x50
+// TWI_MRX_DATA_ACK			0x50
 static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -785,7 +803,7 @@ static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 			// send the clock
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_CLK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_DATA_ACK, &msg, -1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_MRX_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 			return;
 		}
 
@@ -797,7 +815,7 @@ static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_DATA_ACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MRX_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -805,16 +823,16 @@ static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_DATA_NACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MRX_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x58
+// TWI_MRX_DATA_NACK		0x58
 static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 #if AVR_TWI_DEBUG
@@ -828,7 +846,7 @@ static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 			return;
 		}
 
@@ -836,7 +854,7 @@ static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_011x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_INACT, START_UNCHG, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -845,7 +863,7 @@ static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 		if (_TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_STOP, 0);
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, 1, 1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, &msg, BUS_UNCHG, START_PEND, WO_INT);
 			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
@@ -860,7 +878,7 @@ static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xa8
@@ -891,19 +909,19 @@ static void _avr_twi_fsm_stx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 
 		// data acked
 		if (link->bus.msg == TWI_MSG_ACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// data nacked
 		if (link->bus.msg == TWI_MSG_NACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xb0
@@ -935,19 +953,19 @@ static void _avr_twi_fsm_stx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 
 		// data acked
 		if (link->bus.msg == TWI_MSG_ACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// data nacked
 		if (link->bus.msg == TWI_MSG_NACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xb8
@@ -979,19 +997,19 @@ static void _avr_twi_fsm_stx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 
 		// data acked
 		if (link->bus.msg == TWI_MSG_ACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// data nacked
 		if (link->bus.msg == TWI_MSG_NACK) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_STX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xc0
@@ -1006,13 +1024,13 @@ static void _avr_twi_fsm_stx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 	if (!link) {
 		// reset fsm
 		if (_TWCR_COND_001x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
 			return;
 		}
 
 		// start pending
 		if (_TWCR_COND_101x) {
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_NO_STATE, NULL, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_NO_STATE, NULL, BUS_ACT, START_UNCHG, WO_INT);
 			return;
 		}
 	}
@@ -1021,13 +1039,13 @@ static void _avr_twi_fsm_stx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 	if (link) {
 		// stop
 		if (link->bus.msg == TWI_MSG_STOP) {
-			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, NULL, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_STOP_CYCLES, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xc8
@@ -1047,7 +1065,7 @@ static void _avr_twi_fsm_stx_ack_last_byte(struct avr_twi_t * p, struct twcr_t t
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x60
@@ -1073,7 +1091,7 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1082,13 +1100,13 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x68
@@ -1108,10 +1126,10 @@ static void _avr_twi_fsm_srx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x70
+// TWI_SRX_GEN_ACK		0x70
 static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -1134,7 +1152,7 @@ static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_SRX_GEN_DATA_ACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1143,13 +1161,13 @@ static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_GEN_DATA_NACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_GEN_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x78
@@ -1169,7 +1187,7 @@ static void _avr_twi_fsm_srx_gen_ack_m_arb_lost(struct avr_twi_t * p, struct twc
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x80
@@ -1195,7 +1213,7 @@ static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t tw
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1204,25 +1222,25 @@ static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t tw
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// receiving a restart
 		if (link->bus.msg == TWI_MSG_START && _TWCR_COND_xxx1) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, 1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, BUS_ACT, START_UNCHG, W_INT);
 			return;
 		}
 
 		// receiving a stop
 		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_xxx1) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, 0, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, BUS_INACT, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x88
@@ -1237,13 +1255,13 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 	if (!link) {
 		// switched to not addressed slave mode, no recognition of SLA or GCA
 		if (_TWCR_COND_0010) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 0, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, W_INT);
 			return;
 		}
 
 		// switched to not addressed slave mode
 		if (_TWCR_COND_0011) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 0, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, W_INT);
 			return;
 		}
 	}
@@ -1255,7 +1273,7 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 
 		// receiving a restart
 		if (start && _TWCR_COND_xxx1) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, 1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, BUS_ACT, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1264,22 +1282,22 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 			p->bus_state = 0;
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 			return;
 		}
 
 		// receiving a stop and no action pending
 		if (stop && _TWCR_COND_001x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 0, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_NO, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x90
+// TWI_SRX_GEN_DATA_ACK		0x90
 static void _avr_twi_fsm_srx_gen_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -1302,7 +1320,7 @@ static void _avr_twi_fsm_srx_gen_data_ack(struct avr_twi_t * p, struct twcr_t tw
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_DATA_ACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1311,25 +1329,25 @@ static void _avr_twi_fsm_srx_gen_data_ack(struct avr_twi_t * p, struct twcr_t tw
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_GEN_DATA_NACK, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_GEN_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
 		// receiving a restart
 		if (link->bus.msg == TWI_MSG_START && _TWCR_COND_xxx1) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, 1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, BUS_ACT, START_UNCHG, W_INT);
 			return;
 		}
 
 		// receiving a stop
 		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_xxx1) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, 0, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_SRX_STOP_RESTART, NULL, BUS_INACT, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0x98
@@ -1348,20 +1366,20 @@ static void _avr_twi_fsm_srx_gen_data_nack(struct avr_twi_t * p, struct twcr_t t
 	if (link) {
 		// receiving a stop
 		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_001x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
 			return;
 		}
 
 		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_101x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // 0xa0
@@ -1380,19 +1398,19 @@ static void _avr_twi_fsm_srx_stop_restart(struct avr_twi_t * p, struct twcr_t tw
 	if (link) {
 		// receiving a start
 		if (link->bus.msg == TWI_MSG_START && _TWCR_COND_xxxx) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, 1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_ACT, START_UNCHG, WO_INT);
 			return;
 		}
 
 		// receiving a stop
 		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_xxxx) {
-			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_NO_STATE, NULL, 0, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 0);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 static void _avr_twi_fsm_unknown(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
@@ -1411,10 +1429,10 @@ static void _avr_twi_fsm_unknown(struct avr_twi_t * p, struct twcr_t twcr, struc
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0xf8
+// TWI_NO_STATE			0xf8
 static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -1435,7 +1453,7 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 			if (p->bus_state == 0) {
 				avr_twi_msg_irq_t msg;
 				msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 				return;
 			}
 			else {
@@ -1465,7 +1483,7 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 			if (_TWCR_COND_10x1) {
 				avr_twi_msg_irq_t msg;
 				msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 				return;
 			}
 
@@ -1473,7 +1491,7 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 			if (p->start_pending) {
 				avr_twi_msg_irq_t msg;
 				msg = avr_twi_irq_msg(TWI_MSG_START, 0);
-				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, 1, 0, 1);
+				_avr_twi_delay_state(p, AVR_TWI_START_CYCLES, TWI_START, &msg, BUS_ACT, START_NO, W_INT);
 				return;
 			}
 
@@ -1494,8 +1512,9 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 
 			// gen call ?
 			if (link->bus.addr == 0x00 && avr->data[p->r_twar] & 0x01) {
+				p->gencall = 1;
 				msg = avr_twi_irq_msg(TWI_MSG_ACK, link->bus.addr);
-				_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_GEN_ACK, &msg, -1, -1, 1);
+				_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				return;
 			}
 
@@ -1505,10 +1524,10 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 
 				// SLA+R ?
 				if (link->bus.addr & 0x01) {
-					_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_STX_ADR_ACK, &msg, -1, -1, 1);
+					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_STX_ADR_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				} else {
 				// SLA+W ?
-					_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_ADR_ACK, &msg, -1, -1, 1);
+					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				}
 				return;
 			}
@@ -1516,7 +1535,7 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 			// not accessed or not responding to gencall
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, avr->data[p->r_twar]);	// send own address in response
 			avr_raise_irq(p->io.irq + TWI_IRQ_OUTPUT, msg.v);
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_NO_STATE, NULL, -1, -1, 0);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_NO_STATE, NULL, BUS_UNCHG, START_UNCHG, WO_INT);
 			return;
 		}
 
@@ -1527,7 +1546,7 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 			// gen call ?
 			if (link->bus.addr == 0x00 && avr->data[p->r_twar] & 0x01) {
 				msg = avr_twi_irq_msg(TWI_MSG_ACK, link->bus.addr);
-				_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_ACK_M_ARB_LOST, &msg, -1, -1, 1);
+				_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_GEN_ACK_M_ARB_LOST, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				return;
 			}
 
@@ -1537,23 +1556,23 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 
 				// SLA+R ?
 				if (link->bus.addr & 0x01) {
-					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_STX_ADR_ACK_M_ARB_LOST, &msg, -1, -1, 1);
+					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_STX_ADR_ACK_M_ARB_LOST, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				} else {
 				// SLA+W ?
-					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_ACK_M_ARB_LOST, &msg, -1, -1, 1);
+					_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_ACK_M_ARB_LOST, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 				}
 				return;
 			}
 
 			// not accessed and arbitration lost
 			msg = avr_twi_irq_msg(TWI_MSG_NULL, avr->data[p->r_twar]);	// send own address in response
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_ARB_LOST, &msg, -1, -1, 1);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_ARB_LOST, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
 
 	// unhandled case ==> go into error more
-	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, 0, 0, 1);
+	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
 // elements match the TWI internal state (TWSR >> 3)
@@ -1633,7 +1652,7 @@ avr_twi_write(
 	uint8_t twsr = avr_regbit_get_raw(p->io.avr, p->twsr);
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "\n\n[\x1b[94m%s\x1b[0m] %s %02x  t=%d\n"
+	AVR_TRACE(avr, "\n\n[\x1b[94m%s\x1b[0m] %s 0x%02x\t(t=%d)\n"
 		"\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
 			avr->tag_name, __func__, v, avr->cycle,
 			twcr.twsta, twcr.twsto, twcr.twint, twcr.twea, p->bus_state, p->start_pending, twsr, p->gencall);
@@ -1674,7 +1693,7 @@ avr_twi_write_data(
 	avr_twi_t * p = (avr_twi_t *)param;
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "[%s] %s 0x%02x\n", avr->tag_name, __func__, v);
+	AVR_TRACE(avr, "[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, v, avr->cycle);
 #endif
 
 	if (avr_regbit_get(avr, p->twi.raised)) {
@@ -1697,7 +1716,7 @@ avr_twi_read_data(
 	avr_twi_t * p = (avr_twi_t *)param;
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "[%s] %s 0x%02x\n", avr->tag_name, __func__, avr->data[p->r_twdr]);
+	AVR_TRACE(avr, "[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, avr->data[p->r_twdr], avr->cycle);
 #endif
 
 	return avr->data[p->r_twdr];
@@ -1746,8 +1765,8 @@ avr_twi_irq_input(
 	msg.v = value;
 
 #if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "\t[%s] %s msg %s  addr 0x%02x+%d / data 0x%02x\n", 
-			avr->tag_name, __func__, msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01, msg.bus.data);
+	AVR_TRACE(avr, "\t[\x1b[94m%s\x1b[0m] %s msg %s  addr 0x%02x+%c / data 0x%02x\t(t=%d)\n", 
+			avr->tag_name, __func__, msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data, avr->cycle);
 
 	AVR_TRACE(avr, "\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
 			twcr.twsta, twcr.twsto, twcr.twint, twcr.twea, p->bus_state, p->start_pending, twsr, p->gencall);
