@@ -94,6 +94,7 @@
 
 #define _TWCR_COND_011x	(!twcr.twsta &&  twcr.twsto &&  twcr.twint &&  1		)
 
+#define _TWCR_COND_1010	( twcr.twsta && !twcr.twsto &&  twcr.twint && !twcr.twea)
 #define _TWCR_COND_101x	( twcr.twsta && !twcr.twsto &&  twcr.twint &&  1		)
 
 #define _TWCR_COND_10x1	( twcr.twsta && !twcr.twsto &&  1		  &&  twcr.twea)
@@ -475,7 +476,7 @@ static void _avr_twi_fsm_rep_start(struct avr_twi_t * p, struct twcr_t twcr, str
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x18
+// TWI_MTX_ADR_ACK		0x18
 static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -489,7 +490,7 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 		if (_TWCR_COND_001x) {
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_DATA, avr->data[p->r_twdr]);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWSR_UNCHG, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWSR_UNCHG, &msg, BUS_UNCHG, START_UNCHG, WO_INT);
 
 			// in case of gencall, at least 1 slave shall ack
 			p->gencall = 0;
@@ -501,14 +502,14 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 	if (link) {
 		// data acked and not already gencall acked ?
 		if (link->bus.msg == TWI_MSG_ACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_MTX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_MTX_DATA_ACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			p->gencall = 1;
 			return;
 		}
 
 		// data nacked and never gencall acked?
 		if (link->bus.msg == TWI_MSG_NACK && !p->gencall) {
-			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_MTX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_MTX_DATA_NACK, NULL, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
@@ -1068,7 +1069,7 @@ static void _avr_twi_fsm_stx_ack_last_byte(struct avr_twi_t * p, struct twcr_t t
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x60
+// TWI_SRX_ADR_ACK		0x60
 static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -1091,7 +1092,7 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_ACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_DATA_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 
@@ -1100,7 +1101,7 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
-			_avr_twi_delay_state(p, AVR_TWI_ADDR_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
 			return;
 		}
 	}
@@ -1243,7 +1244,7 @@ static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t tw
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x88
+// TWI_SRX_ADR_DATA_NACK		0x88
 static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 #if AVR_TWI_DEBUG
@@ -1256,12 +1257,14 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 		// switched to not addressed slave mode, no recognition of SLA or GCA
 		if (_TWCR_COND_0010) {
 			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, W_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
 
 		// switched to not addressed slave mode
 		if (_TWCR_COND_0011) {
 			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, W_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
 	}
@@ -1288,7 +1291,8 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 
 		// receiving a stop and no action pending
 		if (stop && _TWCR_COND_001x) {
-			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_NO, W_INT);
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_NO, WO_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_NO_CYCLE);
 			return;
 		}
 	}
@@ -1360,6 +1364,33 @@ static void _avr_twi_fsm_srx_gen_data_nack(struct avr_twi_t * p, struct twcr_t t
 
 	// register access ?
 	if (!link) {
+		// switched to not addressed slave mode, no recognition of SLA or GCA
+		if (_TWCR_COND_0010) {
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
+			return;
+		}
+
+		// switched to not addressed slave mode
+		if (_TWCR_COND_0011) {
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, WO_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
+			return;
+		}
+
+		// switched to not addressed slave mode, no recognition of SLA or GCA, start pending
+		if (_TWCR_COND_1010) {
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_PEND, WO_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
+			return;
+		}
+
+		// switched to not addressed slave mode, start pending
+		if (_TWCR_COND_0011) {
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_PEND, WO_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
+			return;
+		}
 	}
 
 	// bus message ?
