@@ -123,10 +123,11 @@ typedef struct avr_twi_set_state_t {
 
 
 // activate debug traces
-#define AVR_TWI_DEBUG 1
+#define AVR_TWI_DEBUG
 
+#ifdef AVR_TWI_DEBUG
+# define AVR_TWI_TRACE(avr, ...)	AVR_TRACE(avr, __VA_ARGS__)
 
-#if AVR_TWI_DEBUG
 # define BRIGTH_COLOR	"\x1b[95m"
 # define NORMAL_COLOR	"\x1b[0m"
 
@@ -140,6 +141,9 @@ static char* msg2chr[] = {
 	BRIGTH_COLOR"w"NORMAL_COLOR,
 	BRIGTH_COLOR"]"NORMAL_COLOR
 };
+
+#else
+# define AVR_TWI_TRACE(avr, ...)
 #endif
 
 
@@ -153,16 +157,17 @@ _avr_twi_state_update(
 	struct avr_twi_set_state_t* new_state = (struct avr_twi_set_state_t *)param;
 	avr_twi_t * p = (avr_twi_t *)new_state->twi;
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(p->io.avr, "[\x1b[94m%s\x1b[0m] %s             (t=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d\n", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
-#endif
+	AVR_TWI_TRACE(p->io.avr, "TWI:[\x1b[94m%s\x1b[0m] %s             (t=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
 
 	if (new_state->msg_ok) {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 		struct avr_twi_msg_irq_t msg = new_state->msg;
-		AVR_TRACE(avr, "\tmsg %s  addr 0x%02x+%c / data 0x%02x\n", msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data);
 #endif
+		AVR_TWI_TRACE(avr, "\tmsg %s  addr 0x%02x+%c / data 0x%02x\n", msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data);
 		avr_raise_irq(p->io.irq + TWI_IRQ_OUTPUT, new_state->msg.v);
+	}
+	else {
+		AVR_TWI_TRACE(avr, "\n");
 	}
 
 	p->bus_state = new_state->bus_state;
@@ -235,15 +240,19 @@ _avr_twi_delay_state(
 
 	avr_cycle_timer_register(twi->io.avr, cycles, _avr_twi_state_update, next_state);
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(twi->io.avr, "[\x1b[94m%s\x1b[0m] %s in %d cycle(s)(t=%d) ==>",
-		twi->io.avr->tag_name, __func__, twi_cycles, twi->io.avr->cycle + cycles, next_state->twsr);
-	AVR_TRACE(twi->io.avr, " (bus:%d p:%d TWSR:0x%02x) ", twi->bus_state, twi->start_pending, next_state->twsr);
-	if (msg)
-		AVR_TRACE(twi->io.avr, " msg %s", msg2chr[msg->bus.msg]);
-	AVR_TRACE(twi->io.avr, "\n");
+	AVR_TWI_TRACE(twi->io.avr, 
+		"TWI:[\x1b[94m%s\x1b[0m] %s in %d cycle(s)(t=%d) ==> (bus:%d p:%d TWSR:0x%02x)",
+		twi->io.avr->tag_name, __func__, twi_cycles, twi->io.avr->cycle + cycles,
+		twi->bus_state, twi->start_pending, next_state->twsr
+		);
 
-
+	if (msg) {
+		AVR_TWI_TRACE(twi->io.avr, " msg %s\n", msg2chr[msg->bus.msg]);
+	}
+	else {
+		AVR_TWI_TRACE(twi->io.avr, "\n");
+	}
+#ifdef AVR_TWI_DEBUG
 	if (twsr == TWI_BUS_ERROR) {
 		// segfault the code
 		void(*f)(void) = NULL;
@@ -262,9 +271,7 @@ avr_twi_config_stop_timer(
 	avr_twi_t * p = (avr_twi_t *)param;
 
 	avr_regbit_clear(p->io.avr, p->twsto);
-#if AVR_TWI_DEBUG
-	AVR_TRACE(p->io.avr, "[\x1b[94m%s\x1b[0m] %s\n", p->io.avr->tag_name, __func__);
-#endif
+	AVR_TWI_TRACE(p->io.avr, "TWI:[\x1b[94m%s\x1b[0m] %s\n", p->io.avr->tag_name, __func__);
 
 	return 0;
 }
@@ -282,9 +289,7 @@ _avr_twi_delay_config_stop(
 
 	avr_cycle_timer_register(twi->io.avr, cycles, avr_twi_config_stop_timer, twi);
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(twi->io.avr, "[\x1b[94m%s\x1b[0m] %s in %d cycle(s)\n", twi->io.avr->tag_name, __func__, twi_cycles);
-#endif
+	AVR_TWI_TRACE(twi->io.avr, "TWI:[\x1b[94m%s\x1b[0m] %s in %d cycle(s)\n", twi->io.avr->tag_name, __func__, twi_cycles);
 }
 
 
@@ -301,9 +306,7 @@ typedef struct twcr_t {
 static void _avr_twi_fsm_bus_error(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -330,9 +333,7 @@ static void _avr_twi_fsm_bus_error(struct avr_twi_t * p, struct twcr_t twcr, str
 static void _avr_twi_fsm_start(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -405,9 +406,7 @@ static void _avr_twi_fsm_start(struct avr_twi_t * p, struct twcr_t twcr, struct 
 static void _avr_twi_fsm_rep_start(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -480,9 +479,7 @@ static void _avr_twi_fsm_rep_start(struct avr_twi_t * p, struct twcr_t twcr, str
 static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -521,10 +518,10 @@ static void _avr_twi_fsm_mtx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 // 0x20
 static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -571,9 +568,7 @@ static void _avr_twi_fsm_mtx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -630,10 +625,10 @@ static void _avr_twi_fsm_mtx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 // 0x30
 static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -688,10 +683,10 @@ static void _avr_twi_fsm_mtx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 // 0x38
 static void _avr_twi_fsm_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -720,9 +715,7 @@ static void _avr_twi_fsm_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, stru
 static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -759,10 +752,10 @@ static void _avr_twi_fsm_mrx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 // TWI_MRX_ADR_NACK           0x48
 static void _avr_twi_fsm_mrx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -794,9 +787,7 @@ static void _avr_twi_fsm_mrx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -836,10 +827,10 @@ static void _avr_twi_fsm_mrx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 // TWI_MRX_DATA_NACK		0x58
 static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -886,9 +877,7 @@ static void _avr_twi_fsm_mrx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 static void _avr_twi_fsm_stx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -929,9 +918,7 @@ static void _avr_twi_fsm_stx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 static void _avr_twi_fsm_stx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -973,9 +960,7 @@ static void _avr_twi_fsm_stx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 static void _avr_twi_fsm_stx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1016,10 +1001,10 @@ static void _avr_twi_fsm_stx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 // 0xc0
 static void _avr_twi_fsm_stx_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1052,10 +1037,10 @@ static void _avr_twi_fsm_stx_data_nack(struct avr_twi_t * p, struct twcr_t twcr,
 // 0xc8
 static void _avr_twi_fsm_stx_ack_last_byte(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1073,9 +1058,7 @@ static void _avr_twi_fsm_stx_ack_last_byte(struct avr_twi_t * p, struct twcr_t t
 static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1113,10 +1096,10 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 // 0x68
 static void _avr_twi_fsm_srx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1134,9 +1117,7 @@ static void _avr_twi_fsm_srx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1174,10 +1155,10 @@ static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 // 0x78
 static void _avr_twi_fsm_srx_gen_ack_m_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1195,9 +1176,7 @@ static void _avr_twi_fsm_srx_gen_ack_m_arb_lost(struct avr_twi_t * p, struct twc
 static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1247,10 +1226,10 @@ static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t tw
 // TWI_SRX_ADR_DATA_NACK		0x88
 static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1305,9 +1284,7 @@ static void _avr_twi_fsm_srx_adr_data_nack(struct avr_twi_t * p, struct twcr_t t
 static void _avr_twi_fsm_srx_gen_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1357,10 +1334,10 @@ static void _avr_twi_fsm_srx_gen_data_ack(struct avr_twi_t * p, struct twcr_t tw
 // 0x98
 static void _avr_twi_fsm_srx_gen_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1416,10 +1393,10 @@ static void _avr_twi_fsm_srx_gen_data_nack(struct avr_twi_t * p, struct twcr_t t
 // 0xa0
 static void _avr_twi_fsm_srx_stop_restart(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1446,10 +1423,10 @@ static void _avr_twi_fsm_srx_stop_restart(struct avr_twi_t * p, struct twcr_t tw
 
 static void _avr_twi_fsm_unknown(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
-#if AVR_TWI_DEBUG
+#ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
-	AVR_TRACE(avr, "%s\n", __func__);
 #endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1467,9 +1444,7 @@ static void _avr_twi_fsm_unknown(struct avr_twi_t * p, struct twcr_t twcr, struc
 static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "%s\n", __func__);
-#endif
+	AVR_TWI_TRACE(avr, "%s\n", __func__);
 
 	// register access ?
 	if (!link) {
@@ -1682,28 +1657,22 @@ avr_twi_write(
 	twcr.twen = avr_regbit_get(avr, p->twen);
 	uint8_t twsr = avr_regbit_get_raw(p->io.avr, p->twsr);
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "\n\n[\x1b[94m%s\x1b[0m] %s 0x%02x\t(t=%d)\n"
-		"\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
-			avr->tag_name, __func__, v, avr->cycle,
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t(t=%d)\n",
+			avr->tag_name, __func__, v, avr->cycle);
+	AVR_TWI_TRACE(avr, "TWI:\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
 			twcr.twsta, twcr.twsto, twcr.twint, twcr.twea, p->bus_state, p->start_pending, twsr, p->gencall);
-#endif
 
 
 	if (twcr.twen) {
 		(*_avr_twi_fsm[twsr >> 3])(p, twcr, NULL);
-#if AVR_TWI_DEBUG
-		AVR_TRACE(avr, "\n");
-#endif
+		AVR_TWI_TRACE(avr, "\n");
 	} else {
 		avr_regbit_setto_raw(p->io.avr, p->twsr, TWI_NO_STATE);
 		avr_regbit_clear(avr, p->twea);
 		avr_regbit_clear(avr, p->twsta);
 		avr_regbit_clear(avr, p->twsto);
 		avr_clear_interrupt(avr, &p->twi);
-#if AVR_TWI_DEBUG
-		AVR_TRACE(avr, "disabled\n");
-#endif
+		AVR_TWI_TRACE(avr, "disabled\n");
 	}
 
 	if (twcr.twint)
@@ -1723,9 +1692,7 @@ avr_twi_write_data(
 {
 	avr_twi_t * p = (avr_twi_t *)param;
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, v, avr->cycle);
-#endif
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, v, avr->cycle);
 
 	if (avr_regbit_get(avr, p->twi.raised)) {
 		avr_core_watch_write(avr, addr, v);
@@ -1746,9 +1713,7 @@ avr_twi_read_data(
 {
 	avr_twi_t * p = (avr_twi_t *)param;
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, avr->data[p->r_twdr], avr->cycle);
-#endif
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, avr->data[p->r_twdr], avr->cycle);
 
 	return avr->data[p->r_twdr];
 }
@@ -1795,13 +1760,11 @@ avr_twi_irq_input(
 	avr_twi_msg_irq_t msg;
 	msg.v = value;
 
-#if AVR_TWI_DEBUG
-	AVR_TRACE(avr, "\t[\x1b[94m%s\x1b[0m] %s msg %s  addr 0x%02x+%c / data 0x%02x\t(t=%d)\n", 
+	AVR_TWI_TRACE(avr, "TWI:\t[\x1b[94m%s\x1b[0m] %s msg %s  addr 0x%02x+%c / data 0x%02x\t(t=%d)\n", 
 			avr->tag_name, __func__, msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data, avr->cycle);
 
-	AVR_TRACE(avr, "\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
+	AVR_TWI_TRACE(avr, "TWI:\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
 			twcr.twsta, twcr.twsto, twcr.twint, twcr.twea, p->bus_state, p->start_pending, twsr, p->gencall);
-#endif
 
 	(*_avr_twi_fsm[twsr >> 3])(p, twcr, &msg);
 }
