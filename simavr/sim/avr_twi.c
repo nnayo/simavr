@@ -89,8 +89,8 @@
 #define _TWCR_COND_0011	(!twcr.twsta && !twcr.twsto &&  twcr.twint &&  twcr.twea)
 #define _TWCR_COND_001x	(!twcr.twsta && !twcr.twsto &&  twcr.twint &&  1		)
 
-#define _TWCR_COND_00x1	(!twcr.twsta && !twcr.twsto &&  1		  &&  twcr.twea)
-#define _TWCR_COND_00xx	(!twcr.twsta && !twcr.twsto &&  1		  &&  1		)
+#define _TWCR_COND_00x1	(!twcr.twsta && !twcr.twsto &&  1          &&  twcr.twea)
+#define _TWCR_COND_00xx	(!twcr.twsta && !twcr.twsto &&  1          &&  1        )
 
 #define _TWCR_COND_011x	(!twcr.twsta &&  twcr.twsto &&  twcr.twint &&  1		)
 
@@ -101,14 +101,15 @@
 
 #define _TWCR_COND_111x	( twcr.twsta &&  twcr.twsto &&  twcr.twint &&  1		)
 
-#define _TWCR_COND_x01x	( 1		  && !twcr.twsto &&  twcr.twint &&  1		)
+#define _TWCR_COND_x01x	( 1          && !twcr.twsto &&  twcr.twint &&  1		)
 
-#define _TWCR_COND_x0x0	( 1		  && !twcr.twsto &&  1		  && !twcr.twea)
-#define _TWCR_COND_x0x1	( 1		  && !twcr.twsto &&  1		  &&  twcr.twea)
+#define _TWCR_COND_x0x0	( 1          && !twcr.twsto &&  1          && !twcr.twea)
+#define _TWCR_COND_x0x1	( 1          && !twcr.twsto &&  1          &&  twcr.twea)
+#define _TWCR_COND_x0xx	( 1          && !twcr.twsto &&  1          &&  1		)
 
-#define _TWCR_COND_xxx0	( 1		  &&  1		  &&  1		  && !twcr.twea)
-#define _TWCR_COND_xxx1	( 1		  &&  1		  &&  1		  &&  twcr.twea)
-#define _TWCR_COND_xxxx	( 1		  &&  1		  &&  1		  &&  1		)
+#define _TWCR_COND_xxx0	( 1          &&  1          &&  1          && !twcr.twea)
+#define _TWCR_COND_xxx1	( 1          &&  1          &&  1          &&  twcr.twea)
+#define _TWCR_COND_xxxx	( 1          &&  1          &&  1          &&  1		)
 
 
 typedef struct avr_twi_set_state_t {
@@ -157,7 +158,7 @@ _avr_twi_state_update(
 	struct avr_twi_set_state_t* new_state = (struct avr_twi_set_state_t *)param;
 	avr_twi_t * p = (avr_twi_t *)new_state->twi;
 
-	AVR_TWI_TRACE(p->io.avr, "TWI:[\x1b[94m%s\x1b[0m] %s             (t=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
+	AVR_TWI_TRACE(p->io.avr, "TWI:[\x1b[94m%s\x1b[0m] %s             (c=%d) --> (bus:%d p:%d TWSR:0x%02x) i:%d", p->io.avr->tag_name, __func__, when, new_state->bus_state, new_state->start_pending, new_state->twsr, new_state->raise_interrupt);
 
 	if (new_state->msg_ok) {
 #ifdef AVR_TWI_DEBUG
@@ -241,7 +242,7 @@ _avr_twi_delay_state(
 	avr_cycle_timer_register(twi->io.avr, cycles, _avr_twi_state_update, next_state);
 
 	AVR_TWI_TRACE(twi->io.avr, 
-		"TWI:[\x1b[94m%s\x1b[0m] %s in %d cycle(s)(t=%d) ==> (bus:%d p:%d TWSR:0x%02x)",
+		"TWI:[\x1b[94m%s\x1b[0m] %s in %d cycle(s)(c=%d) ==> (bus:%d p:%d TWSR:0x%02x)",
 		twi->io.avr->tag_name, __func__, twi_cycles, twi->io.avr->cycle + cycles,
 		twi->bus_state, twi->start_pending, next_state->twsr
 		);
@@ -998,7 +999,7 @@ static void _avr_twi_fsm_stx_data_ack(struct avr_twi_t * p, struct twcr_t twcr, 
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0xc0
+// TWI_STX_DATA_NACK		0xc0
 static void _avr_twi_fsm_stx_data_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 #ifdef AVR_TWI_DEBUG
@@ -1163,6 +1164,13 @@ static void _avr_twi_fsm_srx_gen_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 			avr_twi_msg_irq_t msg;
 			msg = avr_twi_irq_msg(TWI_MSG_NACK, 0);
 			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_GEN_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			return;
+		}
+
+		// stop received ?
+		if (link->bus.msg == TWI_MSG_STOP && _TWCR_COND_x0xx) {
+			_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_NO_STATE, NULL, BUS_INACT, START_UNCHG, W_INT);
+			_avr_twi_delay_config_stop(p, AVR_TWI_STOP_CYCLES);
 			return;
 		}
 	}
@@ -1685,7 +1693,7 @@ avr_twi_write(
 	twcr.twen = avr_regbit_get(avr, p->twen);
 	uint8_t twsr = avr_regbit_get_raw(p->io.avr, p->twsr);
 
-	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t(t=%d)\n",
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t(c=%d)\n",
 			avr->tag_name, __func__, v, avr->cycle);
 	AVR_TWI_TRACE(avr, "TWI:\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
 			twcr.twsta, twcr.twsto, twcr.twint, twcr.twea, p->bus_state, p->start_pending, twsr, p->gencall);
@@ -1720,7 +1728,7 @@ avr_twi_write_data(
 {
 	avr_twi_t * p = (avr_twi_t *)param;
 
-	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, v, avr->cycle);
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(c=%d)\n", avr->tag_name, __func__, v, avr->cycle);
 
 	if (avr_regbit_get(avr, p->twi.raised)) {
 		avr_core_watch_write(avr, addr, v);
@@ -1741,7 +1749,7 @@ avr_twi_read_data(
 {
 	avr_twi_t * p = (avr_twi_t *)param;
 
-	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(t=%d)\n", avr->tag_name, __func__, avr->data[p->r_twdr], avr->cycle);
+	AVR_TWI_TRACE(avr, "TWI:[\x1b[94m%s\x1b[0m] %s 0x%02x\t\t(c=%d)\n", avr->tag_name, __func__, avr->data[p->r_twdr], avr->cycle);
 
 	return avr->data[p->r_twdr];
 }
@@ -1788,7 +1796,7 @@ avr_twi_irq_input(
 	avr_twi_msg_irq_t msg;
 	msg.v = value;
 
-	AVR_TWI_TRACE(avr, "TWI:\t[\x1b[94m%s\x1b[0m] %s msg %s  addr 0x%02x+%c / data 0x%02x\t(t=%d)\n", 
+	AVR_TWI_TRACE(avr, "TWI:\t[\x1b[94m%s\x1b[0m] %s msg %s  addr 0x%02x+%c / data 0x%02x\t(c=%d)\n", 
 			avr->tag_name, __func__, msg2chr[msg.bus.msg], msg.bus.data >> 1, msg.bus.data & 0x01 ? 'R' : 'W', msg.bus.data, avr->cycle);
 
 	AVR_TWI_TRACE(avr, "TWI:\t\tSTART:%d STOP:%d INT:%d EA:%d  bus:%d p:%d TWSR:%02x GC:%d --> ",
