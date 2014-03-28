@@ -1093,8 +1093,8 @@ static void _avr_twi_fsm_srx_adr_ack(struct avr_twi_t * p, struct twcr_t twcr, s
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x68
-static void _avr_twi_fsm_srx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
+// TWI_SRX_ADR_ACK_M_ARB_LOST		0x68
+static void _avr_twi_fsm_srx_adr_ack_m_arb_lost(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 #ifdef AVR_TWI_DEBUG
 	avr_t * avr = p->io.avr;
@@ -1103,10 +1103,29 @@ static void _avr_twi_fsm_srx_adr_nack(struct avr_twi_t * p, struct twcr_t twcr, 
 
 	// register access ?
 	if (!link) {
+		if (_TWCR_COND_x01x) {
+			// handling done below on data message
+			return;
+		}
 	}
 
 	// bus message ?
 	if (link) {
+		if (link->bus.msg == TWI_MSG_DATA && _TWCR_COND_0011) {
+			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
+			avr_twi_msg_irq_t msg;
+			msg = avr_twi_irq_msg(TWI_MSG_ACK, avr->data[p->r_twdr]);
+			_avr_twi_delay_state(p, AVR_TWI_ACK_CYCLES, TWI_SRX_ADR_DATA_ACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			return;
+		}
+
+		if (link->bus.msg == TWI_MSG_DATA && _TWCR_COND_0010) {
+			avr_core_watch_write(avr, p->r_twdr, link->bus.data);
+			avr_twi_msg_irq_t msg;
+			msg = avr_twi_irq_msg(TWI_MSG_NACK, avr->data[p->r_twdr]);
+			_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_SRX_ADR_DATA_NACK, &msg, BUS_UNCHG, START_UNCHG, W_INT);
+			return;
+		}
 	}
 
 	// unhandled case ==> go into error more
@@ -1172,7 +1191,7 @@ static void _avr_twi_fsm_srx_gen_ack_m_arb_lost(struct avr_twi_t * p, struct twc
 	_avr_twi_delay_state(p, AVR_TWI_NO_CYCLE, TWI_BUS_ERROR, NULL, BUS_INACT, START_NO, W_INT);
 }
 
-// 0x80
+// TWI_SRX_ADR_DATA_ACK		0x80
 static void _avr_twi_fsm_srx_adr_data_ack(struct avr_twi_t * p, struct twcr_t twcr, struct avr_twi_msg_irq_t * link)
 {
 	avr_t * avr = p->io.avr;
@@ -1525,6 +1544,14 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 				return;
 			}
 
+			// own address unset ?
+			if ((avr->data[p->r_twar] >> 1) == 0x00) {
+				msg = avr_twi_irq_msg(TWI_MSG_NACK, avr->data[p->r_twar]);	// send own address in response
+				avr_raise_irq(p->io.irq + TWI_IRQ_OUTPUT, msg.v);
+				_avr_twi_delay_state(p, AVR_TWI_NACK_CYCLES, TWI_NO_STATE, NULL, BUS_UNCHG, START_UNCHG, WO_INT);
+				return;
+			}
+
 			// slave own address ?
 			if ((link->bus.addr >> 1) == (avr->data[p->r_twar] >> 1)) {
 				msg = avr_twi_irq_msg(TWI_MSG_ACK, link->bus.addr);
@@ -1607,7 +1634,7 @@ static void (*_avr_twi_fsm[])(struct avr_twi_t * p, struct twcr_t twcr, struct a
 
 	// TWI Slave Receiver
 	_avr_twi_fsm_srx_adr_ack,				// 0x60
-	_avr_twi_fsm_srx_adr_nack,				// 0x68
+	_avr_twi_fsm_srx_adr_ack_m_arb_lost,	// 0x68
 
 	_avr_twi_fsm_srx_gen_ack,				// 0x70
 	_avr_twi_fsm_srx_gen_ack_m_arb_lost,	// 0x78
