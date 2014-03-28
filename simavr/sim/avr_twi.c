@@ -1506,9 +1506,10 @@ static void _avr_twi_fsm_no_state(struct avr_twi_t * p, struct twcr_t twcr, stru
 
 		// DATA, ACK or NACK received ?
 		if (link->bus.msg == TWI_MSG_DATA
+			|| link->bus.msg == TWI_MSG_CLK
 			|| link->bus.msg == TWI_MSG_ACK
 			|| link->bus.msg == TWI_MSG_NACK) {
-			// ignore it, it is probably part of multi-slave exchange
+			// ignore it, it is probably part of master-slave exchange
 			return;
 		}
 
